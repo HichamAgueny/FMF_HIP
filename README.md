@@ -1,3 +1,29 @@
+Det her repoet inneholder den originale implementasjonen av Fast Match Filter og HIP-versjonen.(src/matched_filter.cu.hip)
+2 Makefiler, en for HIP som kompilerer FMF på LUMI og den originale.
+Målet er å lage CMakeLists.txt som compiler FMF på LUMI, en CMakeLists.txt som compiler FMF på f. eks Saga også kombinere disse i en som kan identifisere systemet AMD/NVIDIA og compile dette.
+
+1. Lag CMakeLists.txt basert på Makefile-HIP
+2. Lag CmakeLists.txt basert på den originale Makefila (Matlab er uinteressant og kan fjernes/ignoreres)
+3. Kombiner disse.
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # fast_matched_filter (FMF)
 An efficient seismic matched-filter search for both CPU and GPU architectures. Documentation at https://ebeauce.github.io/FMF_documentation/.
 
