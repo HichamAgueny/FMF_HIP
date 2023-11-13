@@ -55,7 +55,7 @@ def read_data():
     with open('stream_2006-01-01_181.pickle', "rb") as stream_file:
         stream = pickle.load(stream_file)
     return templates, stream
-#@profile
+
 def setup_templates(templates, stream):
     # Get dicts that describe which template and data are available for CC
     array_dict_tuple = _get_array_dicts(templates, stream, stack=True)
