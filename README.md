@@ -33,10 +33,18 @@ Big data example: The challenge is to speed this up.
 
 All data and code implementations are located in project directory:
 
+Big data:
+```
 /project/project_465000096/FMF_test_big_share-SYCL
+```
+Medium data:
+```
 /project/project_465000096/FMF_test_medium_share
+```
+Big/medium/tests ready to run with HIP:
+```
 /project/project_465000096/FMF-HIP
-
+````
 If you are running the big data example I suggest using this implementation:
 
 ```
