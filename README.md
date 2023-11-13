@@ -1,11 +1,114 @@
-Det her repoet inneholder den originale implementasjonen av Fast Match Filter og HIP-versjonen.(src/matched_filter.cu.hip)
-2 Makefiler, en for HIP som kompilerer FMF på LUMI og den originale.
-Målet er å lage CMakeLists.txt som compiler FMF på LUMI, en CMakeLists.txt som compiler FMF på f. eks Saga også kombinere disse i en som kan identifisere systemet AMD/NVIDIA og compile dette.
+HOW TO INSTALL AND RUN FMF HIP ON LUMI:
 
-1. Lag CMakeLists.txt basert på Makefile-HIP
-2. Lag CmakeLists.txt basert på den originale Makefila (Matlab er uinteressant og kan fjernes/ignoreres)
-3. Kombiner disse.
-   
+Replace original Makefile with Makefile-HIP. Use make python_gpu (python_cpu if you want the cpu implementation too)
+
+Install conda environment with the following:
+```
+ml LUMI/23.03  partition/G
+ml lumi-container-wrapper
+
+mkdir FMF_env
+conda-containerize new --prefix FMF_env env.yaml
+```
+env.yaml:
+```
+channels:
+  - conda-forge
+dependencies:
+  - numpy=1.24.4
+  - eqcorrscan=0.4.4
+```
+Working conda environment is also located in:
+```
+export PATH="/project/project_465000096/FMF-HIP/fmf_env/bin:$PATH"
+```
+
+We have 3 ways to test the code:
+
+Built-in tests that are quick to run and will only test the FMF module located in /fast_matched_filter/fast_matched_filter/tests
+
+Medium data example: Fast running example that requires EQcorrscan from conda environment.
+
+Big data example: The challenge is to speed this up.
+
+All data and code implementations are located in project directory:
+
+/project/project_465000096/FMF_test_big_share-SYCL
+/project/project_465000096/FMF_test_medium_share
+/project/project_465000096/FMF-HIP
+
+If you are running the big data example I suggest using this implementation:
+
+```
+import numpy as np
+import pickle
+from timeit import default_timer
+from fast_matched_filter import matched_filter as fmf
+from eqcorrscan.utils.correlate import _get_array_dicts
+import logging
+import gc
+
+NUM_TEMPLATES = 5269
+def read_data():
+    with open('templates_5269.pickle', "rb") as template_file:
+        templates = pickle.load(template_file)
+    with open('stream_2006-01-01_181.pickle', "rb") as stream_file:
+        stream = pickle.load(stream_file)
+    return templates, stream
+#@profile
+def setup_templates(templates, stream):
+    # Get dicts that describe which template and data are available for CC
+    array_dict_tuple = _get_array_dicts(templates, stream, stack=True)
+    del templates, stream
+    gc.collect()
+    stream_dict, template_dict, pad_dict, seed_ids = array_dict_tuple
+    del array_dict_tuple
+    # Reshape templates into [templates x traces x time]
+    template_arr = np.array([template_dict[seed_id] for seed_id in seed_ids], dtype=np.float32).swapaxes(0, 1)
+    # Reshape stream into [traces x time]
+    data_arr = np.array([stream_dict[seed_id] for seed_id in seed_ids], dtype=np.float32)
+    # Moveouts should be [templates x traces]
+    pads = np.array([pad_dict[seed_id] for seed_id in seed_ids], dtype=np.float32).swapaxes(0, 1)
+    # Weights should be shaped like pads
+    weights = np.ones_like(pads)
+    template_arr -= template_arr.mean(axis=-1, keepdims=True)
+    data_arr -= data_arr.mean(axis=-1, keepdims=True)
+
+    del stream_dict, template_dict, pad_dict, seed_ids
+    return template_arr, data_arr, weights, pads
+
+def match_filter(template_array, weight, pad, data_array):
+    return fmf(templates=template_array, weights=weight, moveouts=pad, check_zeros='all',
+                data=data_array, step=1,
+                arch='gpu', normalize="full")
+def main():
+    Logger = logging.getLogger(__name__)
+    logging.basicConfig(level=logging.INFO,
+        format="%(asctime)s\t%(name)40s:%(lineno)s\t%(funcName)20s()" +
+        "\t%(levelname)s\t%(message)s")
+
+    Logger.info('Reading data')
+    
+    templates, stream = read_data()
+    del templates[NUM_TEMPLATES:]
+    template_arr, data_arr, weights, pads = setup_templates(templates, stream)
+    del templates, stream
+    outtic = default_timer()
+    gc.collect()
+    Logger.info(f"Starting FMF correlation run with {NUM_TEMPLATES} templates")
+    cccsums = match_filter(template_arr, weights, pads, data_arr)
+    del template_arr, weights, pads, data_arr
+    gc.collect()
+
+    outtoc = default_timer()
+
+    Logger.info('FMF spent: {0:.4f}s'.format(outtoc - outtic))
+
+if __name__ == "__main__":
+    main()
+```
+
+Here you can adjust the number of templates you want to run by editing the NUM_TEMPLATES variable.
 
 
 
@@ -16,12 +119,8 @@ Målet er å lage CMakeLists.txt som compiler FMF på LUMI, en CMakeLists.txt so
 
 
 
-
-
-
-
-
-
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
 
 # fast_matched_filter (FMF)
