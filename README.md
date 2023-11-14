@@ -1,6 +1,11 @@
 HOW TO INSTALL AND RUN FMF HIP ON LUMI:
 
-Replace original Makefile with Makefile-HIP. Use make python_gpu (python_cpu if you want the cpu implementation too)
+To compile the FMF module:
+```
+Use make python_gpu (python_cpu if you want the cpu implementation too, which is useful for built-in tests)
+```
+To run the medium or big data example, the python module EQcorrscan is needed + a bunch of other dependencies.
+Installing EQcorrscan with conda will provide the needed modules and dependencies:
 
 Install conda environment with the following:
 ```
@@ -46,7 +51,7 @@ Big/medium/tests ready to run with HIP:
 /project/project_465000096/FMF-HIP
 ````
 If you are running the big data example I suggest using this implementation:
-
+You will need to edit the correct path to the data or have the data in the same folder as the implementation.
 ```
 import numpy as np
 import pickle
