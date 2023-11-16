@@ -254,10 +254,7 @@ extern "C"
             cudaMemcpy(templates_d, templates, sizeof_templates, cudaMemcpyHostToDevice);
             cudaMemcpy(moveouts_d, moveouts, sizeof_moveouts, cudaMemcpyHostToDevice);
             cudaMemcpy(data_d, data, sizeof_data, cudaMemcpyHostToDevice);
-            // cudaMemcpy(sum_square_templates_d, sum_square_templates, sizeof_sum_square_templates, cudaMemcpyHostToDevice);
             cudaMemcpy(weights_d, weights, sizeof_weights, cudaMemcpyHostToDevice);
-            //printf("||||||||template data: %f |||||\n", sum_square_templates_d[0]);
-            //square_templates<<<32, 512>>>(templates_d, sum_square_templates_d, n_templates, n_samples_template, n_components, n_stations);
             
             // loop over templates
             while (t_global < (int)n_templates)
@@ -308,11 +305,10 @@ extern "C"
                     max_moveout = (moveouts_t[i] > max_moveout) ? moveouts_t[i] : max_moveout;
                 }
                 n_corr_t = (n_samples_data - n_samples_template - max_moveout) / step + 1;
-                                for (size_t ch = 0; ch < NCHUNKS; ch++)
                 
                 // local pointers on the device
                 templates_d_t = templates_d + t_thread * n_samples_template * n_stations * n_components;
-                
+                sum_square_templates_d_t = sum_square_templates_d + t_thread * n_stations * n_components;
                 moveouts_d_t = moveouts_d + t_thread * n_stations * n_components;
                 weights_d_t = weights_d + t_thread * n_stations * n_components;
 
@@ -335,9 +331,7 @@ extern "C"
                     // define block and grid sizes for kernels
                     dim3 BS(BLOCKSIZE);
                     dim3 GS(ceilf(cs / (float)BS.x) * n_stations);
-                    cudaMemset(sum_square_templates_d, 0, sizeof_sum_square_templates);
-                    
-                    sum_square_templates_d_t = sum_square_templates_d + t_thread * n_stations * n_components;
+                                    
                     // process
                     cudaMemset(cc_mat_d, 0, sizeof_cc_mat); // initialize cc_mat to 0
                     network_corr<<<GS, BS, sharedMem>>>(templates_d_t,
