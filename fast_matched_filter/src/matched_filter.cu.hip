@@ -16,9 +16,9 @@
         gpuAssert((ans), __FILE__, __LINE__); \
     }
 
-#define BLOCKSIZE 1024
-#define WARPSIZE 64
-#define NCHUNKS 40
+#define BLOCKSIZE 512
+#define WARPSIZE 32
+#define NCHUNKS 20
 #define STABILITY_THRESHOLD 0.000001f
 #define MEGABYTES pow(1024, 2)
 
@@ -51,14 +51,14 @@ extern "C"
         size_t idx, first_sample_block, first_sample_trace, last_sample_trace; // sample's index
         size_t s;                                                              // counters
         size_t data_offset, templates_offset, sum_square_template_offset, cc_mat_offset;
-        float numerator, denominator, sum_square_data, mean_data, sum_square;
+        float numerator, denominator, sum_square_data, mean_data;
         float data_sample;
         size_t t_idx;
 
         //------------------------------------------------
         size_t count_template = (n_samples_template / WARPSIZE + 1) * WARPSIZE;
         extern __shared__ float shared[];
-        //float *ss_template = &shared[0];
+        float *ss_template = &shared[0];
         float *templates_s = &shared[sizeof(float)];
         float *data_s = &shared[count_template + sizeof(float)];
 
@@ -85,11 +85,13 @@ extern "C"
                 sum_square_data = 0.0f;
                 mean_data = 0.0f;
                 numerator = 0.0f;
-                sum_square = 0.0f;
-                
+
                 // load template and data into shared memory
                 t_idx = threadIdx.x;
-
+                if (t_idx == 0)
+                {
+                    ss_template[0] = sum_square_template[sum_square_template_offset];
+                }
                 while (t_idx < n_samples_template)
                 {
                     templates_s[t_idx] = templates[templates_offset + t_idx];
@@ -125,11 +127,9 @@ extern "C"
                         data_sample = data_s[i + threadIdx.x * step] - mean_data;
                         numerator += data_sample * templates_s[i];
                         sum_square_data += data_sample * data_sample;
-                        sum_square += templates[templates_offset + i] * templates[templates_offset + i];
                     }
-                    sum_square_template[sum_square_template_offset] = sum_square;
-                    denominator = sum_square_data * sum_square_template[sum_square_template_offset];
-                    //denominator = sum_square_data * ss_template[0];
+                    // denominator = sum_square_data * sum_square_template[sum_square_template_offset];
+                    denominator = sum_square_data * ss_template[0];
                     if (cc_mat_offset < (chunk_size * n_stations * n_components))
                     {
                         // check that this thread is not ouf of the chunk's bounds
@@ -168,7 +168,7 @@ extern "C"
     }
 
     //-------------------------------------------------------------------------
-    void matched_filter(float *templates,
+    void matched_filter(float *templates, float *sum_square_templates,
                         int *moveouts, float *data, float *weights, size_t step,
                         size_t n_samples_template, size_t n_samples_data,
                         size_t n_templates, size_t n_stations,
@@ -208,7 +208,7 @@ extern "C"
         size_t sizeof_total = sizeof_templates + sizeof_moveouts + sizeof_data + sizeof_cc_mat + sizeof_cc_out + sizeof_sum_square_templates + sizeof_weights;
 
 #pragma omp parallel shared(t_global, templates, moveouts, data, n_templates, \
-                            cc_out, weights)
+                            cc_out, weights, sum_square_templates)
         {
             float *templates_d = NULL;
             float *data_d = NULL;
@@ -254,6 +254,7 @@ extern "C"
             hipMemcpy(templates_d, templates, sizeof_templates, hipMemcpyHostToDevice);
             hipMemcpy(moveouts_d, moveouts, sizeof_moveouts, hipMemcpyHostToDevice);
             hipMemcpy(data_d, data, sizeof_data, hipMemcpyHostToDevice);
+            hipMemcpy(sum_square_templates_d, sum_square_templates, sizeof_sum_square_templates, hipMemcpyHostToDevice);
             hipMemcpy(weights_d, weights, sizeof_weights, hipMemcpyHostToDevice);
 
             // loop over templates
