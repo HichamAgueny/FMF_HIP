@@ -19,9 +19,9 @@ NVCC=hipcc
 
 all: $(libdir)/matched_filter_GPU.so $(libdir)/matched_filter_CPU.so #$(maindir)/matched_filter.$(mex_extension)
 python_cpu: $(libdir)/matched_filter_CPU.so
-python_gpu: $(libdir)/matched_filter_GPU.so 
+python_gpu: $(libdir)/matched_filter_GPU.so
 #matlab: $(maindir)/matched_filter.$(mex_extension) $(maindir)/matched_filter_precise.$(mex_extension)
-.SUFFIXES: .c .cu .hip
+.SUFFIXES: .c .cu .cpp
 
 # GPU FLAGS
 COPTIMFLAGS_GPU=-O3
@@ -42,7 +42,7 @@ LDFLAGS_CPU=-shared
 #LDFLAGS_MEX=-fopenmp -shared
 
 # build for python
-$(libdir)/matched_filter_GPU.so: $(srcdir)/matched_filter.cu.hip
+$(libdir)/matched_filter_GPU.so: $(srcdir)/matched_filter.hip.cpp
 	$(NVCC) $(COPTIMFLAGS_GPU) $(CFLAGS_GPU) $(ARCHFLAG) $(LDFLAGS_GPU) $< -o $@
 
 $(libdir)/matched_filter_CPU.so: $(srcdir)/matched_filter.c
@@ -55,6 +55,6 @@ $(libdir)/matched_filter_CPU.so: $(srcdir)/matched_filter.c
 #	$(MEX) CC=$(CC) COPTIMFLAGS="$(COPTIMFLAGS_MEX)" CFLAGS="$(CFLAGS_MEX)" LDFLAGS="$(LDFLAGS_MEX)" -output $@ $^
 
 clean:
-	rm $(libdir)/*.so 
+	rm $(libdir)/*.so
 #$(maindir)/*.mex*
 
