@@ -177,14 +177,9 @@ extern "C"
     {
 
         int t_global = -1;
-        int nGPUs;
         size_t Mb = MEGABYTES;
         size_t sizeof_cc_out = 0;
         size_t sizeof_cc_out_chunk = 0;
-
-        // find the number of available GPUs
-        hipGetDeviceCount(&nGPUs);
-        omp_set_num_threads(min(nGPUs, (int)n_templates));
 
         size_t chunk_size = n_corr / NCHUNKS + 1;
 
@@ -207,9 +202,6 @@ extern "C"
         size_t sizeof_weights = sizeof(float) * n_templates * n_stations * n_components;
         size_t sizeof_total = sizeof_templates + sizeof_moveouts + sizeof_data + sizeof_cc_mat + sizeof_cc_out + sizeof_sum_square_templates + sizeof_weights;
 
-#pragma omp parallel shared(t_global, templates, moveouts, data, n_templates, \
-                            cc_out, weights, sum_square_templates)
-        {
             float *templates_d = NULL;
             float *data_d = NULL;
             int *moveouts_d = NULL;
@@ -219,11 +211,8 @@ extern "C"
             float *weights_d = NULL;
             int id;
 
-            // assign thread to a GPU and get its properties
-            id = omp_get_thread_num();
-            hipSetDevice(id);
             hipDeviceProp_t props;
-            hipGetDeviceProperties(&props, id);
+            hipGetDeviceProperties(&props, 0);
 
             // Card-dependent settings: prefer L1 cache or shared memory
             hipDeviceSetCacheConfig(hipFuncCachePreferShared);
@@ -258,9 +247,8 @@ extern "C"
             hipMemcpy(weights_d, weights, sizeof_weights, hipMemcpyHostToDevice);
 
             // loop over templates
-            while (t_global < (int)n_templates)
+            for (size_t t = 0; t < n_templates; t++)
             {
-                int t_thread;
                 size_t n_corr_t;
                 int max_moveout;
                 float *templates_d_t = NULL;
@@ -269,15 +257,6 @@ extern "C"
                 float *sum_square_templates_d_t = NULL;
                 float *weights_d_t = NULL;
                 int maxSharedMem = props.sharedMemPerBlock;
-
-                // increment template loop
-#pragma omp critical
-                {
-                    t_global++;
-                    t_thread = t_global;
-                }
-                if (t_thread >= (int)n_templates)
-                    break;
 
                 // calculate the space required in the shared memory
                 size_t count_template = (n_samples_template / WARPSIZE + 1) * WARPSIZE;
@@ -299,7 +278,7 @@ extern "C"
                 }
 
                 // compute the number of correlation steps for this template
-                moveouts_t = moveouts + t_thread * n_stations * n_components;
+                moveouts_t = moveouts + t * n_stations * n_components;
                 max_moveout = 0;
                 for (size_t i = 0; i < (n_stations * n_components); i++)
                 {
@@ -308,10 +287,10 @@ extern "C"
                 n_corr_t = (n_samples_data - n_samples_template - max_moveout) / step + 1;
 
                 // local pointers on the device
-                templates_d_t = templates_d + t_thread * n_samples_template * n_stations * n_components;
-                sum_square_templates_d_t = sum_square_templates_d + t_thread * n_stations * n_components;
-                moveouts_d_t = moveouts_d + t_thread * n_stations * n_components;
-                weights_d_t = weights_d + t_thread * n_stations * n_components;
+                templates_d_t = templates_d + t * n_samples_template * n_stations * n_components;
+                sum_square_templates_d_t = sum_square_templates_d + t * n_stations * n_components;
+                moveouts_d_t = moveouts_d + t * n_stations * n_components;
+                weights_d_t = weights_d + t * n_stations * n_components;
 
                 for (size_t ch = 0; ch < NCHUNKS; ch++)
                 {
@@ -372,14 +351,14 @@ extern "C"
 
                         // xfer cc_sum back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs;
-                        cc_out_t = cc_out + t_thread * n_corr + chunk_offset;
+                        cc_out_t = cc_out + t * n_corr + chunk_offset;
                         hipMemcpy(cc_out_t, cc_out_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost);
                     }
                     else
                     {
                         // xfer cc_mat back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs * n_stations * n_components;
-                        cc_out_t = cc_out + (t_thread * n_corr + chunk_offset) * n_stations * n_components;
+                        cc_out_t = cc_out + (t * n_corr + chunk_offset) * n_stations * n_components;
                         hipMemcpy(cc_out_t, cc_mat_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost);
                     }
                 }
@@ -395,6 +374,5 @@ extern "C"
             hipFree(sum_square_templates_d);
             hipFree(weights_d);
 
-        } // omp parallel
     }     //  matched_filter
 } // extern C
