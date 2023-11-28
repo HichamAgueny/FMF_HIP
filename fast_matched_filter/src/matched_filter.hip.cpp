@@ -205,8 +205,6 @@ extern "C"
             float *templates_d = NULL;
             float *data_d = NULL;
             int *moveouts_d = NULL;
-            float *cc_mat_d = NULL;
-            float *cc_out_d = NULL;
             float *sum_square_templates_d = NULL;
             float *weights_d = NULL;
             int id;
@@ -230,25 +228,39 @@ extern "C"
                 exit(0);
             }
 
+
+
             // allocate GPU memory
             hipMalloc((void **)&templates_d, sizeof_templates);
             hipMalloc((void **)&moveouts_d, sizeof_moveouts);
             hipMalloc((void **)&data_d, sizeof_data);
-            hipMalloc((void **)&cc_mat_d, sizeof_cc_mat);
-            hipMalloc((void **)&cc_out_d, sizeof_cc_out);
             hipMalloc((void **)&sum_square_templates_d, sizeof_sum_square_templates);
             hipMalloc((void **)&weights_d, sizeof_weights);
 
+            /* Per template */
+            //hipMalloc((void **)&cc_mat_d, sizeof_cc_mat);
+            //hipMalloc((void **)&cc_out_d, sizeof_cc_out);
+
             // transfer the inputs from host to the GPU
+            hipMemcpy(data_d, data, sizeof_data, hipMemcpyHostToDevice);
+
+            /* TODO: per stream*/
             hipMemcpy(templates_d, templates, sizeof_templates, hipMemcpyHostToDevice);
             hipMemcpy(moveouts_d, moveouts, sizeof_moveouts, hipMemcpyHostToDevice);
-            hipMemcpy(data_d, data, sizeof_data, hipMemcpyHostToDevice);
             hipMemcpy(sum_square_templates_d, sum_square_templates, sizeof_sum_square_templates, hipMemcpyHostToDevice);
             hipMemcpy(weights_d, weights, sizeof_weights, hipMemcpyHostToDevice);
 
+
+            hipStream_t *streams = (hipStream_t*) malloc(n_templates * sizeof(hipStream_t));
             // loop over templates
             for (size_t t = 0; t < n_templates; t++)
             {
+                float *cc_mat_d = NULL;
+                float *cc_out_d = NULL;
+                hipStreamCreateWithFlags(&streams[t], hipStreamNonBlocking);
+                
+                hipMallocAsync((void **)&cc_mat_d, sizeof_cc_mat * n_templates, streams[t]);
+                hipMallocAsync((void **)&cc_out_d, sizeof_cc_out * n_templates, streams[t]);
                 size_t n_corr_t;
                 int max_moveout;
                 float *templates_d_t = NULL;
@@ -313,8 +325,8 @@ extern "C"
                     dim3 GS(ceilf(cs / (float)BS.x) * n_stations);
 
                     // process
-                    hipMemset(cc_mat_d, 0, sizeof_cc_mat); // initialize cc_mat to 0
-                    hipLaunchKernelGGL(network_corr, dim3(GS), dim3(BS), sharedMem, 0, templates_d_t,
+                    hipMemsetAsync(&cc_mat_d[sizeof_cc_mat * t], 0, sizeof_cc_mat, streams[t]); // initialize cc_mat to 0
+                    hipLaunchKernelGGL(network_corr, dim3(GS), dim3(BS), sharedMem, streams[t], templates_d_t,
                                                         sum_square_templates_d_t,
                                                         moveouts_d_t,
                                                         data_d,
@@ -330,49 +342,52 @@ extern "C"
                                                         normalize);
 
                     // return an error if something happened in the kernel (and crash the program)
-                    gpuErrchk(hipPeekAtLastError());
-                    gpuErrchk(hipDeviceSynchronize());
+                    //gpuErrchk(hipPeekAtLastError());
+                    //gpuErrchk(hipDeviceSynchronize());
 
                     if (sum_cc_mode > 0)
                     {
                         // weighted sum of correlation coefficients
-                        hipMemset(cc_out_d, 0, sizeof_cc_out);
+                        hipMemsetAsync(cc_out_d, 0, sizeof_cc_out, streams[t]);
 
                         // using a small block size seems to improve the speed of sum_cc
                         dim3 BS_sum(32);
                         dim3 GS_sum(ceilf(cs / (float)BS_sum.x));
-                        hipLaunchKernelGGL(sum_cc, dim3(GS_sum), dim3(BS_sum), 0, 0, cc_mat_d, cc_out_d, weights_d_t,
+                        hipLaunchKernelGGL(sum_cc, dim3(GS_sum), dim3(BS_sum), 0, streams[t], cc_mat_d, cc_out_d, weights_d_t,
                                                    n_stations, n_components,
                                                    n_corr_t, chunk_offset, cs);
 
                         // return an error if something happened in the kernel (and crash the program)
-                        gpuErrchk(hipPeekAtLastError());
-                        gpuErrchk(hipDeviceSynchronize());
+                        //gpuErrchk(hipPeekAtLastError());
+                        //gpuErrchk(hipDeviceSynchronize());
 
                         // xfer cc_sum back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs;
                         cc_out_t = cc_out + t * n_corr + chunk_offset;
-                        hipMemcpy(cc_out_t, cc_out_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost);
+                        hipMemcpyAsync(cc_out_t, cc_out_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost, streams[t]);
                     }
                     else
                     {
                         // xfer cc_mat back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs * n_stations * n_components;
                         cc_out_t = cc_out + (t * n_corr + chunk_offset) * n_stations * n_components;
-                        hipMemcpy(cc_out_t, cc_mat_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost);
+                        hipMemcpyAsync(cc_out_t, cc_mat_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost, streams[t]);
                     }
                 }
-                hipDeviceSynchronize();
-            } // while
 
+                hipFreeAsync(cc_mat_d, streams[t]);
+                hipFreeAsync(cc_out_d, streams[t]);
+            }
+
+            hipDeviceSynchronize();
             // free device memory
             hipFree(templates_d);
             hipFree(moveouts_d);
             hipFree(data_d);
-            hipFree(cc_mat_d);
-            hipFree(cc_out_d);
+
             hipFree(sum_square_templates_d);
             hipFree(weights_d);
 
+            free(streams);
     }     //  matched_filter
 } // extern C
