@@ -311,9 +311,11 @@ extern "C"
                 sum_square_templates_d_t = sum_square_templates_d + t_thread * n_stations * n_components;
                 moveouts_d_t = moveouts_d + t_thread * n_stations * n_components;
                 weights_d_t = weights_d + t_thread * n_stations * n_components;
-
+                hipMemset(cc_mat_d, 0, sizeof_cc_mat); // initialize cc_mat to 0
+                hipStream_t *streams = (hipStream_t*)malloc(NCHUNKS*sizeof(hipStream_t));
                 for (size_t ch = 0; ch < NCHUNKS; ch++)
                 {
+                    hipStreamCreateWithFlags(&streams[ch], hipStreamNonBlocking);
                     size_t chunk_offset = ch * chunk_size;
                     size_t cs;
                     // make sure the chunk is not going out of bounds
@@ -333,8 +335,8 @@ extern "C"
                     dim3 GS(ceilf(cs / (float)BS.x) * n_stations);
 
                     // process
-                    hipMemset(cc_mat_d, 0, sizeof_cc_mat); // initialize cc_mat to 0
-                    hipLaunchKernelGGL(network_corr, dim3(GS), dim3(BS), sharedMem, 0, templates_d_t,
+                    
+                    hipLaunchKernelGGL(network_corr, dim3(GS), dim3(BS), sharedMem, streams[ch], templates_d_t,
                                                         sum_square_templates_d_t,
                                                         moveouts_d_t,
                                                         data_d,
@@ -361,28 +363,29 @@ extern "C"
                         // using a small block size seems to improve the speed of sum_cc
                         dim3 BS_sum(32);
                         dim3 GS_sum(ceilf(cs / (float)BS_sum.x));
-                        hipLaunchKernelGGL(sum_cc, dim3(GS_sum), dim3(BS_sum), 0, 0, cc_mat_d, cc_out_d, weights_d_t,
+                        hipLaunchKernelGGL(sum_cc, dim3(GS_sum), dim3(BS_sum), 0, streams[ch], cc_mat_d, cc_out_d, weights_d_t,
                                                    n_stations, n_components,
                                                    n_corr_t, chunk_offset, cs);
 
                         // return an error if something happened in the kernel (and crash the program)
                         gpuErrchk(hipPeekAtLastError());
-                        gpuErrchk(hipDeviceSynchronize());
+                        //gpuErrchk(hipDeviceSynchronize());
 
                         // xfer cc_sum back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs;
                         cc_out_t = cc_out + t_thread * n_corr + chunk_offset;
-                        hipMemcpy(cc_out_t, cc_out_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost);
+                        hipMemcpyAsync(cc_out_t, cc_out_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost, streams[ch]);
                     }
                     else
                     {
                         // xfer cc_mat back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs * n_stations * n_components;
                         cc_out_t = cc_out + (t_thread * n_corr + chunk_offset) * n_stations * n_components;
-                        hipMemcpy(cc_out_t, cc_mat_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost);
+                        hipMemcpyAsync(cc_out_t, cc_mat_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost, streams[ch]);
                     }
                 }
                 hipDeviceSynchronize();
+                free(streams); // Cleanup streams
             } // while
 
             // free device memory
