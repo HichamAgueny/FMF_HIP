@@ -42,7 +42,7 @@ LDFLAGS_CPU=-shared
 #LDFLAGS_MEX=-fopenmp -shared
 
 # build for python
-$(libdir)/matched_filter_GPU.so: $(srcdir)/matched_filter.hip.cpp
+$(libdir)/matched_filter_GPU.so: $(srcdir)/matched_filter.hip
 	$(NVCC) $(COPTIMFLAGS_GPU) $(CFLAGS_GPU) $(ARCHFLAG) $(LDFLAGS_GPU) $< -o $@
 
 $(libdir)/matched_filter_CPU.so: $(srcdir)/matched_filter.c
