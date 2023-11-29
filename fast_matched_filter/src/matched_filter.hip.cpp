@@ -237,10 +237,6 @@ extern "C"
             hipMalloc((void **)&sum_square_templates_d, sizeof_sum_square_templates);
             hipMalloc((void **)&weights_d, sizeof_weights);
 
-            /* Per template */
-            //hipMalloc((void **)&cc_mat_d, sizeof_cc_mat);
-            //hipMalloc((void **)&cc_out_d, sizeof_cc_out);
-
             // transfer the inputs from host to the GPU
             hipMemcpy(data_d, data, sizeof_data, hipMemcpyHostToDevice);
 
@@ -292,6 +288,8 @@ extern "C"
                 // compute the number of correlation steps for this template
                 moveouts_t = moveouts + t * n_stations * n_components;
                 max_moveout = 0;
+
+                #pragma omp parallel for 
                 for (size_t i = 0; i < (n_stations * n_components); i++)
                 {
                     max_moveout = (moveouts_t[i] > max_moveout) ? moveouts_t[i] : max_moveout;
@@ -304,6 +302,7 @@ extern "C"
                 moveouts_d_t = moveouts_d + t * n_stations * n_components;
                 weights_d_t = weights_d + t * n_stations * n_components;
 
+                #pragma omp parallel for
                 for (size_t ch = 0; ch < NCHUNKS; ch++)
                 {
                     size_t chunk_offset = ch * chunk_size;
@@ -343,7 +342,6 @@ extern "C"
 
                     // return an error if something happened in the kernel (and crash the program)
                     //gpuErrchk(hipPeekAtLastError());
-                    //gpuErrchk(hipDeviceSynchronize());
 
                     if (sum_cc_mode > 0)
                     {
@@ -359,7 +357,6 @@ extern "C"
 
                         // return an error if something happened in the kernel (and crash the program)
                         //gpuErrchk(hipPeekAtLastError());
-                        //gpuErrchk(hipDeviceSynchronize());
 
                         // xfer cc_sum back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs;
@@ -380,6 +377,7 @@ extern "C"
             }
 
             hipDeviceSynchronize();
+
             // free device memory
             hipFree(templates_d);
             hipFree(moveouts_d);
