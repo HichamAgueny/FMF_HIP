@@ -90,17 +90,14 @@ extern "C"
                 // load template and data into shared memory
                 t_idx = threadIdx.x;
 
-                while (t_idx < n_samples_template)
-                {
-                    templates_s[t_idx] = templates[templates_offset + t_idx];
-                    if ((first_sample_trace + t_idx) < n_samples_data)
-                        data_s[t_idx] = data[data_offset + t_idx];
-                    t_idx += blockDim.x;
-                }
                 while (t_idx < (blockDim.x * step + n_samples_template))
                 {
+                    if (t_idx < n_samples_template)
+                        templates_s[t_idx] = templates[templates_offset + t_idx];
+
                     if ((first_sample_trace + t_idx) < n_samples_data)
                         data_s[t_idx] = data[data_offset + t_idx];
+                        
                     t_idx += blockDim.x;
                 }
 
@@ -121,15 +118,15 @@ extern "C"
                     }
 
                     for (size_t i = 0; i < n_samples_template; i++)
+                    for (size_t i = 0; i < n_samples_template; i++)
                     {
                         data_sample = data_s[i + threadIdx.x * step] - mean_data;
                         numerator += data_sample * templates_s[i];
                         sum_square_data += data_sample * data_sample;
-                        sum_square += templates[templates_offset + i] * templates[templates_offset + i];
-                    }
-                    sum_square_template[sum_square_template_offset] = sum_square;
-                    denominator = sum_square_data * sum_square_template[sum_square_template_offset];
-                    //denominator = sum_square_data * ss_template[0];
+                        sum_square += templates[i + templates_offset] * templates[i + templates_offset];
+                    }  
+                    denominator = sum_square_data * sum_square;
+
                     if (cc_mat_offset < (chunk_size * n_stations * n_components))
                     {
                         // check that this thread is not ouf of the chunk's bounds
