@@ -7,7 +7,8 @@
 */
 
 #include <hip/hip_runtime.h>
-#include <stdio.h>
+// #include <stdio.h>
+#include <iostream>
 #include <stdlib.h>
 #include <math.h>
 #include <omp.h>
@@ -44,8 +45,7 @@ extern "C"
                                  size_t step, size_t n_samples_template, size_t n_samples_data,
                                  size_t n_stations, size_t n_components,
                                  size_t chunk_offset, size_t chunk_size,
-                                 float *cc_mat, int normalize)
-    {
+                                 float *cc_mat, int normalize) {
 
         // each thread matches the template to one time in the data
         size_t idx, first_sample_block, first_sample_trace, last_sample_trace; // sample's index
@@ -86,7 +86,7 @@ extern "C"
                 mean_data = 0.0f;
                 numerator = 0.0f;
                 sum_square = 0.0f;
-                
+
                 // load template and data into shared memory
                 t_idx = threadIdx.x;
 
@@ -167,14 +167,49 @@ extern "C"
         }
     }
 
+void checkSharedMemory(size_t sharedMem, size_t count_data,
+                       size_t n_samples_template, int maxSharedMem,
+                       size_t step, size_t count_template) {
+
+    if (sharedMem > maxSharedMem) {
+        size_t new_step = (maxSharedMem / sizeof(float) - 2 * n_samples_template - 2 * WARPSIZE) / BLOCKSIZE;
+        int new_length = maxSharedMem / sizeof(float) - count_data - WARPSIZE;
+        if (new_length < 0) {
+            new_length = 0;
+        }
+        printf("The maximum shared memory available on this card is %zu bytes "
+               "(%zu bytes required). You should consider the different options:\n"
+               "  - Change the temporal step to %zu without changing the template length.\n"
+               "  - Change the template length to %d without changing the temporal step.\n"
+               "  - Try to decrease both of these parameters.\n",
+               size_t(maxSharedMem), sharedMem, new_step, new_length);
+        exit(EXIT_FAILURE);
+    }
+}
+
+inline size_t calculate_chunk_size(size_t chunk_offset, size_t chunk_size, size_t n_corr_t) {
+    size_t cs; // Variable to hold the calculated chunk size
+
+    // Calculate cs based on provided conditions
+    if (chunk_offset + chunk_size > n_corr_t) {
+        cs = n_corr_t - chunk_offset;
+        // If cs is not positive, the function can't return size_t(-1) since size_t is unsigned
+        if (cs == 0)
+            return 0; // Use 0 or some special return value to indicate continuation
+    } else {
+        cs = chunk_size;
+    }
+
+    return cs; // Return the calculated chunk size
+}
+
     //-------------------------------------------------------------------------
     void matched_filter(float *templates,
                         int *moveouts, float *data, float *weights, size_t step,
                         size_t n_samples_template, size_t n_samples_data,
                         size_t n_templates, size_t n_stations,
                         size_t n_components, size_t n_corr,
-                        float *cc_out, int normalize, int sum_cc_mode)
-    {
+                        float *cc_out, int normalize, int sum_cc_mode) {
 
         int t_global = -1;
         size_t Mb = MEGABYTES;
@@ -202,11 +237,11 @@ extern "C"
         size_t sizeof_weights = sizeof(float) * n_templates * n_stations * n_components;
         size_t sizeof_total = sizeof_templates + sizeof_moveouts + sizeof_data + sizeof_cc_mat + sizeof_cc_out + sizeof_sum_square_templates + sizeof_weights;
 
-            float *templates_d = NULL;
-            float *data_d = NULL;
-            int *moveouts_d = NULL;
-            float *sum_square_templates_d = NULL;
-            float *weights_d = NULL;
+            float *templates_d = nullptr;
+            float *data_d = nullptr;
+            int *moveouts_d = nullptr;
+            float *sum_square_templates_d = nullptr;
+            float *weights_d = nullptr;
             int id;
 
             hipDeviceProp_t props;
@@ -243,87 +278,59 @@ extern "C"
             /* TODO: per stream*/
             hipMemcpy(templates_d, templates, sizeof_templates, hipMemcpyHostToDevice);
             hipMemcpy(moveouts_d, moveouts, sizeof_moveouts, hipMemcpyHostToDevice);
-            //hipMemcpy(sum_square_templates_d, sum_square_templates, sizeof_sum_square_templates, hipMemcpyHostToDevice);
             hipMemcpy(weights_d, weights, sizeof_weights, hipMemcpyHostToDevice);
+
+
+            int maxSharedMem = props.sharedMemPerBlock;
+
+            size_t count_template = (n_samples_template / WARPSIZE + 1) * WARPSIZE;
+            size_t count_data = ((n_samples_template + BLOCKSIZE * step) / WARPSIZE + 1) * WARPSIZE;
+            size_t sharedMem = (count_template + count_data + 1) * sizeof(float);
+            checkSharedMemory(sharedMem, count_data, n_samples_template, maxSharedMem, step, count_template);
 
 
             hipStream_t *streams = (hipStream_t*) malloc(n_templates * sizeof(hipStream_t));
             // loop over templates
-            for (size_t t = 0; t < n_templates; t++)
-            {
-                float *cc_mat_d = NULL;
-                float *cc_out_d = NULL;
+            for (size_t t = 0; t < n_templates; t++) {
+                // Create streams
                 hipStreamCreateWithFlags(&streams[t], hipStreamNonBlocking);
-                
+
+                // Allocate result
+                float *cc_mat_d = nullptr;
+                float *cc_out_d = nullptr;
                 hipMallocAsync((void **)&cc_mat_d, sizeof_cc_mat * n_templates, streams[t]);
                 hipMallocAsync((void **)&cc_out_d, sizeof_cc_out * n_templates, streams[t]);
-                size_t n_corr_t;
                 int max_moveout;
-                float *templates_d_t = NULL;
-                int *moveouts_t = NULL, *moveouts_d_t = NULL;
-                float *cc_out_t = NULL;
-                float *sum_square_templates_d_t = NULL;
-                float *weights_d_t = NULL;
-                int maxSharedMem = props.sharedMemPerBlock;
-
-                // calculate the space required in the shared memory
-                size_t count_template = (n_samples_template / WARPSIZE + 1) * WARPSIZE;
-                size_t count_data = ((n_samples_template + BLOCKSIZE * step) / WARPSIZE + 1) * WARPSIZE;
-                size_t sharedMem = (count_template + count_data + 1) * sizeof(float);
-                if (sharedMem > maxSharedMem)
-                {
-                    size_t new_step = (maxSharedMem / sizeof(float) - 2 * n_samples_template - 2 * WARPSIZE) / BLOCKSIZE;
-                    int new_length = maxSharedMem / sizeof(float) - count_data - WARPSIZE;
-                    if (new_length < 0)
-                        new_length = 0;
-                    printf("The maximum shared memory available on this card is %zu Mb "
-                           "(%zu Mb required). You should consider the different options:\n"
-                           "  - Change the temporal step to %zu without changing the template length.\n"
-                           "  - Change the template length to %d without changing the temporal step.\n"
-                           "  - Try to decrease both of these parameters.\n",
-                           maxSharedMem / Mb, sharedMem / Mb, new_step, new_length);
-                    exit(0);
-                }
+                float *cc_out_t = nullptr;
 
                 // compute the number of correlation steps for this template
-                moveouts_t = moveouts + t * n_stations * n_components;
+                int *moveouts_t = moveouts + t * n_stations * n_components;
                 max_moveout = 0;
 
-                #pragma omp parallel for 
                 for (size_t i = 0; i < (n_stations * n_components); i++)
-                {
                     max_moveout = (moveouts_t[i] > max_moveout) ? moveouts_t[i] : max_moveout;
-                }
-                n_corr_t = (n_samples_data - n_samples_template - max_moveout) / step + 1;
+
+                size_t n_corr_t = (n_samples_data - n_samples_template - max_moveout) / step + 1;
 
                 // local pointers on the device
-                templates_d_t = templates_d + t * n_samples_template * n_stations * n_components;
-                sum_square_templates_d_t = sum_square_templates_d + t * n_stations * n_components;
-                moveouts_d_t = moveouts_d + t * n_stations * n_components;
-                weights_d_t = weights_d + t * n_stations * n_components;
+                float *templates_d_t = templates_d + t * n_samples_template * n_stations * n_components;
+                float *sum_square_templates_d_t = sum_square_templates_d + t * n_stations * n_components;
+                int *moveouts_d_t = moveouts_d + t * n_stations * n_components;
+                float *weights_d_t = weights_d + t * n_stations * n_components;
 
-                #pragma omp parallel for
-                for (size_t ch = 0; ch < NCHUNKS; ch++)
-                {
+                for (size_t ch = 0; ch < NCHUNKS; ch++) {
                     size_t chunk_offset = ch * chunk_size;
-                    size_t cs;
+
                     // make sure the chunk is not going out of bounds
-                    if (chunk_offset + chunk_size > n_corr_t)
-                    {
-                        cs = n_corr_t - chunk_offset;
-                        if (cs <= 0)
-                            continue;
-                    }
-                    else
-                    {
-                        cs = chunk_size;
-                    }
+                    size_t cs = calculate_chunk_size(chunk_offset, chunk_size, n_corr_t);
+                    if (cs == 0)
+                        continue;
 
                     // define block and grid sizes for kernels
                     dim3 BS(BLOCKSIZE);
                     dim3 GS(ceilf(cs / (float)BS.x) * n_stations);
 
-                    // process
+                   // process
                     hipMemsetAsync(&cc_mat_d[sizeof_cc_mat * t], 0, sizeof_cc_mat, streams[t]); // initialize cc_mat to 0
                     hipLaunchKernelGGL(network_corr, dim3(GS), dim3(BS), sharedMem, streams[t], templates_d_t,
                                                         sum_square_templates_d_t,
@@ -340,11 +347,7 @@ extern "C"
                                                         cc_mat_d,
                                                         normalize);
 
-                    // return an error if something happened in the kernel (and crash the program)
-                    //gpuErrchk(hipPeekAtLastError());
-
-                    if (sum_cc_mode > 0)
-                    {
+                    if (sum_cc_mode > 0) {
                         // weighted sum of correlation coefficients
                         hipMemsetAsync(cc_out_d, 0, sizeof_cc_out, streams[t]);
 
@@ -355,16 +358,11 @@ extern "C"
                                                    n_stations, n_components,
                                                    n_corr_t, chunk_offset, cs);
 
-                        // return an error if something happened in the kernel (and crash the program)
-                        //gpuErrchk(hipPeekAtLastError());
-
                         // xfer cc_sum back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs;
                         cc_out_t = cc_out + t * n_corr + chunk_offset;
                         hipMemcpyAsync(cc_out_t, cc_out_d, sizeof_cc_out_chunk, hipMemcpyDeviceToHost, streams[t]);
-                    }
-                    else
-                    {
+                    } else {
                         // xfer cc_mat back to host
                         sizeof_cc_out_chunk = sizeof(float) * cs * n_stations * n_components;
                         cc_out_t = cc_out + (t * n_corr + chunk_offset) * n_stations * n_components;
