@@ -118,7 +118,6 @@ extern "C"
                     }
 
                     for (size_t i = 0; i < n_samples_template; i++)
-                    for (size_t i = 0; i < n_samples_template; i++)
                     {
                         data_sample = data_s[i + threadIdx.x * step] - mean_data;
                         numerator += data_sample * templates_s[i];
